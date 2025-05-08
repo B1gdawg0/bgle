@@ -19,8 +19,14 @@ func UpdateRegisterFile(profile models.Profile) error {
 	bgleDir := filepath.Join(homeDir, ".bgle")
 	registerFilePath := filepath.Join(bgleDir, "register.yaml")
 
-	// Check if the register.yaml file exists
+	// Ensure .bgle directory exists
+	if err := utils.EnsureBgleDirectoryAt(bgleDir); err != nil {
+		return fmt.Errorf("failed to create .bgle directory: %v", err)
+	}
+
 	var register models.Register
+
+	// Load existing register.yaml if it exists
 	if _, err := os.Stat(registerFilePath); err == nil {
 		file, err := os.Open(registerFilePath)
 		if err != nil {
@@ -34,40 +40,30 @@ func UpdateRegisterFile(profile models.Profile) error {
 		}
 	}
 
-	// Check if the profile already exists in the register
-	if _, found := register.Profiles[profile.Project]; found {
-		utils.PrintInfo("Profile already registered.")
-		return nil
-	}
-
-	// Add the new profile entry to the register
-	newEntry := models.ProfileEntry{
-		Profile: profile.Profile,
-		Dir:     profile.Dir,
-	}
-
-	// Initialize Profiles map if nil
+	// Initialize map if nil
 	if register.Profiles == nil {
 		register.Profiles = make(map[string]models.ProfileEntry)
 	}
 
-	// Add profile under the project name as the key
-	register.Profiles[profile.Project] = newEntry
+	// Update or add the profile entry
+	register.Profiles[profile.Project] = models.ProfileEntry{
+		Profile: profile.Profile,
+		Dir:     profile.Dir,
+	}
 
-	// Create or open the register.yaml file
+	// Save back to register.yaml
 	file, err := os.Create(registerFilePath)
 	if err != nil {
 		return fmt.Errorf("error creating register.yaml: %v", err)
 	}
 	defer file.Close()
 
-	// Write the updated register to the file
 	encoder := yaml.NewEncoder(file)
 	encoder.SetIndent(2)
 	if err := encoder.Encode(register); err != nil {
 		return fmt.Errorf("error encoding register.yaml: %v", err)
 	}
 
-	utils.PrintSuccess(fmt.Sprintf("Profile for %s has been registered.", profile.Project))
+	utils.PrintSuccess(fmt.Sprintf("Register updated for project %s.", profile.Project))
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strings"
 )
 
 func PrintInfo(msg string) {
@@ -20,6 +21,17 @@ func PrintError(msg string) {
 
 func PrintWarning(msg string) {
 	fmt.Printf("\033[1;33m%s\033[0m\n", msg) // Yellow
+}
+
+func PrintBoxedWarning(message string) {
+	border := "╔" + strings.Repeat("═", 50) + "╗"
+	footer := "╚" + strings.Repeat("═", 50) + "╝"
+
+	fmt.Println("\033[1;33m" + border + "\033[0m") // Yellow border
+	for _, line := range strings.Split(message, "\n") {
+		fmt.Printf("\033[1;33m║\033[0m %-48s \033[1;33m║\033[0m\n", line)
+	}
+	fmt.Println("\033[1;33m" + footer + "\033[0m")
 }
 
 func AskConfirmation(question string) (bool, error) {

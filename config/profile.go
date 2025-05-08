@@ -52,7 +52,7 @@ func InteractiveProfileCreation(name string, profile string) models.Profile {
 	var bootstrap models.Bootstrap
 
 	if wannaSetup {
-		fmt.Print("Enter Git repository URL (or leave empty if not applicable): ")
+		fmt.Print("Enter Git repository URL: ")
 		repo, _ := reader.ReadString('\n')
 		bootstrap.Repo_URL = strings.TrimSpace(repo)
 
@@ -361,5 +361,5 @@ func createDirNameFromRepo(repo string)(string, error){
 		return "", err
 	}
 
-	return cwd+repoName, nil;
+	return cwd+"/"+repoName, nil;
 }

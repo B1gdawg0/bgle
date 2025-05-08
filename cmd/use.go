@@ -16,6 +16,11 @@ var useCmd = &cobra.Command{
 	Short: "🔧 Use a specific profile from the .bgle directory or register.yaml",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		currentDir, err := os.Getwd()
+		if err != nil {
+			utils.PrintError(fmt.Sprintf("Unable to get current directory: %v", err))
+			return
+		}
 		name, profileName, err := utils.ParseNameProfile(args[0])
 		if err != nil {
 			utils.PrintError("Invalid format. Use project:profile - " + err.Error())
@@ -76,6 +81,8 @@ var useCmd = &cobra.Command{
 		}
 
 		utils.PrintSuccess(fmt.Sprintf("Profile %s:%s applied successfully.", name, profileName))
+
+		utils.CompareCurrentDirWithProfileDir(currentDir, profile.Dir)
 	},
 }
 
