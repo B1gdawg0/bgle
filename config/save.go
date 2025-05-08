@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bgle/models"
 	"bgle/utils"
 	"fmt"
 	"os"
@@ -9,7 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func SaveProfile(profile Profile) error {
+func SaveProfile(profile models.Profile) error {
     homeDir, err := os.UserHomeDir()
     if err != nil {
         return err

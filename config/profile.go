@@ -1,143 +1,272 @@
 package config
 
 import (
+	"bgle/models"
 	"bgle/utils"
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
-type Profile struct {
-    Project string   `yaml:"project"`
-    Profile string   `yaml:"profile"`
-    Dir     string   `yaml:"directory"`
-    Branch  string   `yaml:"branch,omitempty"`
-    Docker  Docker   `yaml:"docker"`
-    EnvFile string   `yaml:"env_file,omitempty"`
-    Scripts []string `yaml:"scripts"`
-}
-
-type Docker struct {
-    Enabled     bool   `yaml:"enabled"`
-    ComposeFile string `yaml:"compose_file"`
-    Up          bool   `yaml:"up"`
-    Build       bool   `yaml:"build"`
-}
-
-// Function to scan for docker-compose files in the current directory
-func selectDockerComposeFile() string {
-    // Scan the directory for docker-compose*.yml files
+func selectDockerComposeFiles() []string {
     files, _ := filepath.Glob("docker-compose*.yml")
     if len(files) == 0 {
         fmt.Println("No docker-compose files found.")
-        return ""
+        return nil
     }
 
-    if len(files) == 1 {
-        fmt.Printf("Using Docker Compose file: %s\n", files[0])
-        return files[0]
-    }
-
-    fmt.Println("Select a Docker Compose file:")
+    fmt.Println("Select Docker Compose files (comma-separated numbers):")
     for i, file := range files {
         fmt.Printf("%d) %s\n", i+1, file)
     }
 
-    var choice int
-    fmt.Print("Choose one (number): ")
-    fmt.Scanln(&choice)
+    fmt.Print("Your choice: ")
+    var input string
+    fmt.Scanln(&input)
 
-    if choice < 1 || choice > len(files) {
-        fmt.Println("Invalid choice. Defaulting to first.")
-        return files[0]
+    var selected []string
+    indexes := strings.Split(input, ",")
+    for _, idx := range indexes {
+        i, err := strconv.Atoi(strings.TrimSpace(idx))
+        if err == nil && i >= 1 && i <= len(files) {
+            selected = append(selected, files[i-1])
+        }
     }
 
-    return files[choice-1]
+    return selected
 }
 
-func InteractiveProfileCreation(name string, profile string) Profile {
+func InteractiveProfileCreation(name string, profile string) models.Profile {
     utils.PrintInfo("Starting profile creation...")
     reader := bufio.NewReader(os.Stdin)
-
-    // Default to current directory for the project
     dir, _ := os.Getwd()
-    // fmt.Print("Project directory (default: current): ")
-    // dir, _ := reader.ReadString('\n')
-    // dir = strings.TrimSpace(dir)
-    // if dir == "" {
-    //     dir, _ = os.Getwd()
-    // }
 
-    // Git branch (optional)
     fmt.Print("Git branch (optional): ")
     branch, _ := reader.ReadString('\n')
     branch = strings.TrimSpace(branch)
 
-    // Ask if Docker should be used
     fmt.Print("Use Docker? (y/n): ")
     dockerInput, _ := reader.ReadString('\n')
     docker := strings.TrimSpace(dockerInput) == "y"
 
-    var dockerConfig Docker
+    var dockerConfig models.Docker
     if docker {
-        // Allow user to select the Docker Compose file
-        file := selectDockerComposeFile()
-        if file == "" {
-            fmt.Println("No Docker Compose file selected. Proceeding without Docker.")
-        }
-
-        // Ask for docker-compose up and build
+        files := selectDockerComposeFiles()
         fmt.Print("Run docker-compose up -d? (y/n): ")
         upInput, _ := reader.ReadString('\n')
         up := strings.TrimSpace(upInput) == "y"
 
-        fmt.Print("Run docker build? (y/n): ")
-        buildInput, _ := reader.ReadString('\n')
-        build := strings.TrimSpace(buildInput) == "y"
+        // fmt.Print("Run docker build? (y/n): ")
+        // buildInput, _ := reader.ReadString('\n')
+        // build := strings.TrimSpace(buildInput) == "y"
 
-        dockerConfig = Docker{
-            Enabled:     true,
-            ComposeFile: file,
-            Up:          up,
-            Build:       build,
+        dockerConfig = models.Docker{
+            Enabled:      true,
+            ComposeFiles: files,
+            Up:           up,
+            // Build:        build,
         }
     }
 
-    // Ask for path to .env file (optional)
     fmt.Print("Path to .env file (optional): ")
     envFile, _ := reader.ReadString('\n')
     envFile = strings.TrimSpace(envFile)
 
-    // Ask for scripts
-    fmt.Println("Enter startup scripts one by one. Type 'exit' to finish:")
-    var scripts []string
+    // ENV VARS
+    fmt.Println("Add env vars (KEY=VALUE). Type 'exit' to stop:")
+    envVars := make(map[string]string)
     for {
         fmt.Print("> ")
-        script, _ := reader.ReadString('\n')
-        script = strings.TrimSpace(script)
-        if script == "exit" {
+        entry, _ := reader.ReadString('\n')
+        entry = strings.TrimSpace(entry)
+        if entry == "exit" {
             break
         }
-        scripts = append(scripts, script)
+        parts := strings.SplitN(entry, "=", 2)
+        if len(parts) == 2 {
+            envVars[parts[0]] = parts[1]
+        }
     }
 
-    profileConfig := Profile{
-        Project: name,
-        Profile: profile,
-        Dir:     dir,
-        Branch:  branch,
-        Docker:  dockerConfig,
-        EnvFile: envFile,
-        Scripts: scripts,
+    // SCRIPTS
+    readScripts := func(title string) []string {
+        fmt.Printf("Enter %s one by one. Type 'exit' to finish:\n", title)
+        var s []string
+        for {
+            fmt.Print("> ")
+            line, _ := reader.ReadString('\n')
+            line = strings.TrimSpace(line)
+            if line == "exit" {
+                break
+            }
+            s = append(s, line)
+        }
+        return s
+    }
+
+    preScripts := readScripts("pre-scripts")
+    var mainScripts []string
+
+    if !dockerConfig.Enabled {
+        mainScripts = readScripts("main scripts")
+    }
+    postScripts := readScripts("post-scripts")
+
+    profileConfig := models.Profile{
+        Project:     name,
+        Profile:     profile,
+        Dir:         dir,
+        Branch:      branch,
+        Docker:      dockerConfig,
+        EnvFile:     envFile,
+        EnvVars:     envVars,
+        PreScripts:  preScripts,
+        Scripts:     mainScripts,
+        PostScripts: postScripts,
     }
 
     if err := SaveProfile(profileConfig); err != nil {
-        utils.PrintError("Error saving profile:"+err.Error())
+        utils.PrintError("Error saving profile: " + err.Error())
     } else {
         utils.PrintSuccess("Profile saved successfully!")
     }
 
     return profileConfig
+}
+
+func ApplyProfileSettings(profile *models.Profile) error {
+	// 1. Change directory
+	if profile.Dir != "" {
+		err := os.Chdir(profile.Dir)
+		if err != nil {
+			return fmt.Errorf("error changing directory: %v", err)
+		}
+		utils.PrintInfo(fmt.Sprintf("📦 Changed directory to %s", shortenPath(profile.Dir)))
+	}
+
+	// 2. Git checkout
+	if profile.Branch != "" {
+		err := runGitCheckout(profile.Branch)
+		if err != nil {
+			return fmt.Errorf("error checking out branch: %v", err)
+		}
+		utils.PrintInfo(fmt.Sprintf("Checked out branch: %s", profile.Branch))
+	}
+
+	// 3. Check if .env file exists, otherwise generate using env_vars
+	if profile.EnvFile != "" {
+		if _, err := os.Stat(profile.EnvFile); os.IsNotExist(err) && len(profile.EnvVars) > 0 {
+			utils.PrintInfo("env file not found. Generating from env_vars...")
+			err := createEnvFile(profile.EnvFile, profile.EnvVars)
+			if err != nil {
+				return fmt.Errorf("failed to create env file: %v", err)
+			}
+			utils.PrintSuccess("env file generated.")
+		}
+	}
+
+	// 4. Run pre-scripts
+	for _, script := range profile.PreScripts {
+		utils.PrintInfo(fmt.Sprintf("Running pre-script: %s", script))
+		if err := runScript(script); err != nil {
+			return fmt.Errorf("error running pre-script '%s': %v", script, err)
+		}
+	}
+    fmt.Println("")
+
+	// 5. Docker compose (optional)
+	if profile.Docker.Enabled && profile.Docker.Up {
+		utils.PrintInfo("Bringing up Docker Compose...\n")
+		for _, file := range profile.Docker.ComposeFiles {
+			utils.PrintInfo(fmt.Sprintf("📄 Using compose file: %s", file))
+		}
+		err := runDockerCompose(profile.Docker.ComposeFiles, profile.EnvFile)
+		if err != nil {
+			return fmt.Errorf("error running docker-compose: %v", err)
+		}
+		utils.PrintSuccess("Docker Compose is up.\n")
+	}
+
+	// 6. Main scripts
+	for _, script := range profile.Scripts {
+		utils.PrintInfo(fmt.Sprintf("Running script: %s", script))
+		if err := runScript(script); err != nil {
+			return fmt.Errorf("error running script '%s': %v", script, err)
+		}
+		utils.PrintSuccess(fmt.Sprintf("%s done", script))
+	}
+
+	// 7. Post scripts
+	for _, script := range profile.PostScripts {
+		utils.PrintInfo(fmt.Sprintf("🧹 Running post-script: %s", script))
+		if err := runScript(script); err != nil {
+			return fmt.Errorf("error running post-script '%s': %v", script, err)
+		}
+	}
+
+	return nil
+}
+
+
+func shortenPath(fullPath string) string {
+	safePath := filepath.ToSlash(fullPath)
+	parts := strings.Split(safePath, "/")
+	if len(parts) >= 2 {
+		return filepath.Join(parts[len(parts)-2], parts[len(parts)-1])
+	}
+	return fullPath
+}
+
+func runGitCheckout(branch string) error {
+	cmd := exec.Command("git", "checkout", branch)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func runDockerCompose(composeFiles []string, envFile string) error {
+	args := []string{"compose"}
+
+	for _, file := range composeFiles {
+		args = append(args, "-f", file)
+	}
+
+	if envFile != "" {
+		args = append(args, "--env-file", envFile)
+	}
+
+	args = append(args, "up", "-d")
+
+	cmd := exec.Command("docker", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+
+func runScript(script string) error {
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func createEnvFile(filePath string, envVars map[string]string) error {
+	file, err := os.Create(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	for k, v := range envVars {
+		_, err := fmt.Fprintf(file, "%s=%s\n", k, v)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
