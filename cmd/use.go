@@ -7,14 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
 var useCmd = &cobra.Command{
 	Use:   "use [project:profile]",
-	Short: "🔧 Use a specific profile from the .bgle directory",
+	Short: "🔧 Use a specific profile from the .bgle directory or register.yaml",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		name, profileName, err := utils.ParseNameProfile(args[0])
@@ -40,14 +39,36 @@ var useCmd = &cobra.Command{
 			return
 		}
 
-		filename := filepath.Join(bgleDir, fmt.Sprintf("%s.%s.yaml", name, profileName))
+		registerFile := filepath.Join(bgleDir, "register.yaml")
+		profileEntity, err := loadProfileFromRegister(registerFile, name, profileName)
+		if err != nil {
+			// utils.PrintError("Profile not found in register.yaml, falling back to .bgle directory...")
+			// // Fallback to loading profile from .bgle directory
+			// filename := filepath.Join(bgleDir, fmt.Sprintf("%s.%s.yaml", name, profileName))
+			// profile, err = loadProfile(filename)
+			// if err != nil {
+			// 	utils.PrintError(fmt.Sprintf("Error loading profile from %s: %v", filename, err))
+			// 	return
+			// }
 
+			utils.PrintError(fmt.Sprintf("Error: %v", err))
+			return
+		}
+
+		filename := filepath.Join(bgleDir, fmt.Sprintf("projects/%s.%s.yaml", name, profileName))
 		profile, err := loadProfile(filename)
+
+		profile.Project = name
+		profile.Profile = profileEntity.Profile
+		profile.Dir = profileEntity.Dir
+		profile.Bootstrap.Enabled = profile.Dir == "."
+
 		if err != nil {
 			utils.PrintError(fmt.Sprintf("Error loading profile from %s: %v", filename, err))
 			return
 		}
 
+		// Apply the profile settings
 		err = config.ApplyProfileSettings(profile)
 		if err != nil {
 			utils.PrintError("Error applying profile: " + err.Error())
@@ -78,78 +99,34 @@ func loadProfile(filePath string) (*models.Profile, error) {
 	return &profile, nil
 }
 
-// func applyProfileSettings(profile *models.Profile) error {
-// 	if profile.Dir != "" {
-// 		err := os.Chdir(profile.Dir)
-// 		if err != nil {
-// 			return fmt.Errorf("error changing directory: %v", err)
-// 		}
-// 		utils.PrintInfo(fmt.Sprintf("📦 Moved to %s", shortenPath(profile.Dir)))
-// 	}
+func loadProfileFromRegister(registerFile, projectName, profileName string) (*models.ProfileEntry, error) {
+	// Load the register.yaml file
+	file, err := os.Open(registerFile)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
 
-// 	if profile.Branch != "" {
-// 		err := runGitCheckout(profile.Branch)
-// 		if err != nil {
-// 			return fmt.Errorf("error checking out branch: %v", err)
-// 		}
-// 		utils.PrintInfo(fmt.Sprintf("Checked out branch: %s", profile.Branch))
-// 	}
+	var register struct {
+		Profiles map[string]models.ProfileEntry `yaml:"profiles"`
+	}
 
-// 	if profile.Docker.Enabled && profile.Docker.Up {
-// 		utils.PrintInfo("🏃 Bringing up Docker Compose...")
-// 		err := runDockerCompose(profile.Docker.ComposeFile, profile.EnvFile)
-// 		if err != nil {
-// 			return fmt.Errorf("error running docker-compose: %v", err)
-// 		}
-// 		utils.PrintSuccess("Docker Compose is up.")
-// 	}
+	decoder := yaml.NewDecoder(file)
+	err = decoder.Decode(&register)
+	if err != nil {
+		return nil, err
+	}
 
-// 	for _, script := range profile.Scripts {
-// 		utils.PrintInfo(fmt.Sprintf("Running script: %s", script))
-// 		err := runScript(script)
-// 		if err != nil {
-// 			return fmt.Errorf("error running script '%s': %v", script, err)
-// 		}
-// 		utils.PrintSuccess(fmt.Sprintf("%s Done!", script))
-// 	}
+	// Check if the projectName exists in the register
+	profileEntry, found := register.Profiles[projectName]
+	if !found {
+		return nil, fmt.Errorf("project %s not found in register.yaml", projectName)
+	}
 
-// 	return nil
-// }
+	// Now, check if the profile matches within the project
+	if profileEntry.Profile != profileName {
+		return nil, fmt.Errorf("profile %s not found under project %s in register.yaml", profileName, projectName)
+	}
 
-// func shortenPath(fullPath string) string {
-// 	safePath := filepath.ToSlash(fullPath)
-// 	parts := strings.Split(safePath, "/")
-// 	if len(parts) >= 2 {
-// 		return filepath.Join(parts[len(parts)-2], parts[len(parts)-1])
-// 	}
-// 	return fullPath
-// }
-
-// func runGitCheckout(branch string) error {
-// 	cmd := exec.Command("git", "checkout", branch)
-// 	cmd.Stdout = os.Stdout
-// 	cmd.Stderr = os.Stderr
-// 	return cmd.Run()
-// }
-
-// func runDockerCompose(composeFile string, envFile string) error {
-// 	args := []string{"compose", "-f", composeFile}
-
-// 	if envFile != "" {
-// 		args = append(args, "--env-file", envFile)
-// 	}
-
-// 	args = append(args, "up", "-d")
-
-// 	cmd := exec.Command("docker", args...)
-// 	cmd.Stdout = os.Stdout
-// 	cmd.Stderr = os.Stderr
-// 	return cmd.Run()
-// }
-
-// func runScript(script string) error {
-// 	cmd := exec.Command("sh", "-c", script)
-// 	cmd.Stdout = os.Stdout
-// 	cmd.Stderr = os.Stderr
-// 	return cmd.Run()
-// }
+	return &profileEntry, nil
+}
