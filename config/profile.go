@@ -45,6 +45,34 @@ func InteractiveProfileCreation(name string, profile string) models.Profile {
     reader := bufio.NewReader(os.Stdin)
     dir, _ := os.Getwd()
 
+	fmt.Print("Would you like to set up a bootstrap script? (y/n): ")
+	bootstrapScript, _ := reader.ReadString('\n')
+	wannaSetup := strings.TrimSpace(strings.ToLower(bootstrapScript)) == "y"
+
+	var bootstrap models.Bootstrap
+
+	if wannaSetup {
+		fmt.Print("Enter Git repository URL: ")
+		repo, _ := reader.ReadString('\n')
+		bootstrap.Repo_URL = strings.TrimSpace(repo)
+
+		fmt.Println("Enter bootstrap scripts (type 'exit' to finish):")
+		for {
+			fmt.Print("> ")
+			entry, _ := reader.ReadString('\n')
+			entry = strings.TrimSpace(entry)
+
+			if entry == "exit" {
+				break
+			}
+
+			if entry != "" {
+				bootstrap.Scripts = append(bootstrap.Scripts, entry)
+			}
+		}
+	}
+	
+
     fmt.Print("Git branch (optional): ")
     branch, _ := reader.ReadString('\n')
     branch = strings.TrimSpace(branch)
@@ -103,7 +131,9 @@ func InteractiveProfileCreation(name string, profile string) models.Profile {
             if line == "exit" {
                 break
             }
-            s = append(s, line)
+            if line != ""{
+				s = append(s, line)
+			}
         }
         return s
     }
@@ -124,23 +154,42 @@ func InteractiveProfileCreation(name string, profile string) models.Profile {
         Docker:      dockerConfig,
         EnvFile:     envFile,
         EnvVars:     envVars,
+		Bootstrap:   bootstrap,
         PreScripts:  preScripts,
         Scripts:     mainScripts,
         PostScripts: postScripts,
-    }
-
-    if err := SaveProfile(profileConfig); err != nil {
-        utils.PrintError("Error saving profile: " + err.Error())
-    } else {
-        utils.PrintSuccess("Profile saved successfully!")
     }
 
     return profileConfig
 }
 
 func ApplyProfileSettings(profile *models.Profile) error {
+	// 0. Set up project if it's don't exist
+	if profile.Bootstrap.Enabled && profile.Bootstrap.Repo_URL != ""{
+		utils.PrintInfo("Start cloning repository...")
+		if err := runScript("git clone "+profile.Bootstrap.Repo_URL); err != nil{
+			return fmt.Errorf("can't clone project from '%s' repository: %v", profile.Bootstrap.Repo_URL, err)
+		}
+
+		dirLocal, err := createDirNameFromRepo(profile.Bootstrap.Repo_URL)
+
+		if err != nil{
+			return fmt.Errorf("%s", "Error: "+err.Error())
+		}
+
+		profile.Dir = dirLocal
+
+		for _, script := range profile.Bootstrap.Scripts {
+			utils.PrintInfo(fmt.Sprintf("Running bootstrap: %s", script))
+			if err := runScript(script); err != nil {
+				return fmt.Errorf("error running bootstrap '%s': %v", script, err)
+			}
+		}
+	}
+
 	// 1. Change directory
 	if profile.Dir != "" {
+		if profile.Dir == "."{ return fmt.Errorf("no directory to access. please complete 'bgle sync %s:%s' first", profile.Project, profile.Profile)}
 		err := os.Chdir(profile.Dir)
 		if err != nil {
 			return fmt.Errorf("error changing directory: %v", err)
@@ -157,6 +206,18 @@ func ApplyProfileSettings(profile *models.Profile) error {
 		utils.PrintInfo(fmt.Sprintf("Checked out branch: %s", profile.Branch))
 	}
 
+	if profile.Bootstrap.Enabled {
+		if err := runGitPullOrigin(profile.Branch); err != nil{
+			return fmt.Errorf("error pull repository url from branch %s\nError: %v",profile.Branch,err)
+		}
+
+		profile.Bootstrap.Enabled = false
+
+		if err := UpdateRegisterFile(*profile); err != nil{
+			return err
+		}
+	}
+	
 	// 3. Check if .env file exists, otherwise generate using env_vars
 	if profile.EnvFile != "" {
 		if _, err := os.Stat(profile.EnvFile); os.IsNotExist(err) && len(profile.EnvVars) > 0 {
@@ -228,6 +289,13 @@ func runGitCheckout(branch string) error {
 	return cmd.Run()
 }
 
+func runGitPullOrigin(branch string) error {
+	cmd := exec.Command("git", "pull","origin", branch)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 func runDockerCompose(composeFiles []string, envFile string) error {
 	args := []string{"compose"}
 
@@ -269,4 +337,29 @@ func createEnvFile(filePath string, envVars map[string]string) error {
 		}
 	}
 	return nil
+}
+
+func getGitRepoNameFromURL(repo string) (string, error) {
+	url := strings.TrimSpace(repo)
+	url = strings.TrimSuffix(url, ".git")
+	parts := strings.Split(url, "/")
+	if len(parts) == 0 {
+		return "", fmt.Errorf("invalid origin URL: %s", url)
+	}
+
+	return parts[len(parts)-1], nil
+}
+
+func createDirNameFromRepo(repo string)(string, error){
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current working directory: %w", err)
+	}
+
+	repoName, err := getGitRepoNameFromURL(repo)
+	if err != nil {
+		return "", err
+	}
+
+	return cwd+"/"+repoName, nil;
 }
